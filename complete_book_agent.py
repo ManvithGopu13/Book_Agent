@@ -48,7 +48,7 @@ def summarize_pdf(pdf_path: str) -> str:
         with open(pdf_path, "rb") as f:
             reader = PdfReader(f)
             for page in reader.pages:
-                text += page.extract_text()[:2000]
+                text += page.extract_text()[:10000]
 
         from langchain_ollama import ChatOllama
         llm = ChatOllama(
@@ -58,7 +58,7 @@ def summarize_pdf(pdf_path: str) -> str:
         )
 
         summary = llm.invoke(
-            f"Summarize this book content in 5 paragraphs: {text[:3000]}"
+            f"Summarize this book content in 5 paragraphs: {text[:10000]}"
         )
         return summary.content
     except Exception as e:
@@ -96,7 +96,9 @@ def create_agent(tools, system_message):
 
 search_agent = create_agent(
     tools = [search_and_download_book],
-    system_message="You are a book search specialist. Always use the search tool."
+    system_message="""You are a book search specialist. 
+    ALWAYS use the search tool and return ONLY the raw file path string. 
+    NEVER add any additional text or formatting."""
 )
 
 summary_agent = create_agent(
@@ -112,16 +114,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         search_result = await search_agent.ainvoke({"input": user_message})
+        file_path = search_result['output'].strip()
 
-        if os.path.exists(search_result["output"]):
+        if file_path.startswith("[") and "]" in file_path:
+            file_path = file_path.split("](")[1].rstrip(")")
+
+        if os.path.exists(file_path) and file_path.endswith(".pdf"):
             await bot.send_document(
                 chat_id= chat_id,
-                document= open(search_result["output"], 'rb'),
+                document= open(file_path, 'rb'),
                 caption="Here's the book you requested!"
             )
 
             summary_result = await summary_agent.ainvoke({
-                "input": f"Summarize this book: {search_result['output']}"
+                "input": f"Summarize this book: {file_path}"
             })
 
             await bot.send_message(
@@ -129,12 +135,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text= f"Summary: \n\n{summary_result['output']}"
             )
 
-            os.remove(search_result['output'])
+            os.remove(file_path)
 
         else:
             await bot.send_message(
                 chat_id= chat_id,
-                text = f"Sorry, Couldn't find the book. Error: {search_result['output']}"
+                text = f"Sorry, Couldn't find the book. Error: {search_result['output']} and recieved file_path: {file_path}"
             )
 
     except Exception as e:
